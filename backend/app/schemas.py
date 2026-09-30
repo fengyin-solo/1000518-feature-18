@@ -28,6 +28,21 @@ class EntryPayload(BaseModel):
     remark: str | None = None
 
 
+class MineralActionPayload(BaseModel):
+    """矿产评价动作请求：动作参数 + 乐观版本号 + 幂等键。
+
+    expectedToken：调用方持有的线索 rev_token，不一致说明已被并发改过，本次不生效。
+    idempotencyKey：同键重复提交只在首次生效，用于“再次提交不得重复生效”。
+    """
+
+    values: dict[str, Any] = Field(default_factory=dict)
+    remark: str | None = None
+    expected_token: int | None = Field(default=None, alias="expectedToken")
+    idempotency_key: str | None = Field(default=None, alias="idempotencyKey")
+
+    model_config = {"populate_by_name": True}
+
+
 
 class BoreholeEntry(BaseModel):
     """钻孔明细结构。"""

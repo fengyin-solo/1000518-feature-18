@@ -74,3 +74,44 @@ npm run dev
   `backend/app/routers/<模块>.py`，业务规则在 `backend/app/services/<模块>.py`。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 矿产评价 · 状态梯级板
+
+矿产评价（`mineral`）的矿化线索按“状态梯级板”管理，业务规则集中在
+`app/services/mineral.py`，老数据迁移在 `app/services/mineral_migration.py`。
+
+- 线索编号确定后只能逐级流转：`待踏勘 → 踏勘中 → 评价中 → 已评价`。
+  跳级提交、同级重复提交、从“已评价”撤销都会被拦下并在 `message` 说明原因。
+- **重开**“已评价”线索会生成新的修订版本（线索编号不变、`修订版本 +1`），
+  旧版本整体进 `mineral_history` 留档，新版本从待踏勘重走，不能回到旧结论。
+- **提交结论**时把结论同步到三张表：矿产评价台账 `mineral_ledger`、
+  偏离点图清单 `mineral_deviation`（三类或命中负向描述才入册）、验证待办 `mineral_todo`。
+- **归档**把当前已评价版本连同三表快照冻结进 `mineral_archive`；归档后只读，
+  任何流转/复核/重开/再次同步都被拦下，现行台账不再读出该线索的新值。
+- 矿种、评价等级与最近一次**现场复核**（`mineral_review`）冲突时以复核为准；
+  历史评价按归档/修订版本留档，不被覆盖。
+- 所有写动作在 `Store.transaction()` 整库快照事务内提交，异常整体回滚；
+  并发流转靠全局锁 + `expectedToken`（rev_token）乐观校验只放一个成功，
+  动作请求带 `idempotencyKey` 时同键只生效一次。
+- 老线索缺“评价等级”的，在服务初始化时按踏勘时间一次性迁移补齐（一类/二类/三类），
+  已有等级不覆盖，迁移只执行一次。
+
+矿产评价新增接口（前缀 `/api/mineral`）：
+
+| 方法 & 路径 | 说明 |
+| --- | --- |
+| `GET /boards` | 四档在线数量 + 三表现行/待办数量 |
+| `GET /ledger?all_versions=` | 矿产评价台账（默认仅现行） |
+| `GET /deviations` | 偏离点图清单 |
+| `GET /todos` | 验证待办 |
+| `GET /reviews?entry_id=` | 现场复核记录 |
+| `GET /archive` | 归档版本（只读快照） |
+| `GET /history?线索编号=` | 重开后的历史修订版本 |
+| `POST /{id}/actions` | 动作：安排踏勘/开始评价/提交结论/撤销/重开/归档/现场复核 |
+
+动作为 `POST /{id}/actions`，请求体形如
+`{ "values": {"action": "提交结论", "评价结论": "...", "评价等级": "一类"},
+   "expectedToken": 3, "idempotencyKey": "..." }`。
+
+领域规则测试（仅标准库）：`cd backend && python3 -m unittest tests.test_mineral_ladder`。
+
